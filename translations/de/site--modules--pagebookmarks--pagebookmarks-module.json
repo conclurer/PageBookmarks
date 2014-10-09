@@ -1,0 +1,12 @@
+{
+    "file": "site\\modules\\PageBookmarks\\PageBookmarks.module",
+    "textdomain": "site--modules--pagebookmarks--pagebookmarks-module",
+    "translations": {
+        "7a69d6b27362b48011a2a09c56e04bce": {
+            "text": "Lesezeichen"
+        },
+        "edf041ca19d7a7a94a85dcd833eab56f": {
+            "text": "F\u00fcgt eine Schnittstelle hinzu, welche dem Benutzer erm\u00f6glicht, Seiten als Lesezeichen zu speichern."
+        }
+    }
+}

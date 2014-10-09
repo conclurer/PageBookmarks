@@ -1,0 +1,275 @@
+<?php
+
+class PageBookmarks extends WireData implements Module
+{
+
+    public static function getModuleInfo()
+    {
+        return array(
+            'title' => __('Bookmarks'),
+            'summary' => __('Adds a simple API for users to bookmark pages.'),
+            'author' => 'Conclurer GbR',
+            'version' => '100',
+            'autoload' => true
+        );
+    }
+
+    public function init()
+    {
+        $this->addHookProperty("Page::bookmark", $this, 'hookGetBookmark');
+        $this->addHookProperty("User::bookmarks", $this, 'hookGetUserBookmarks');
+        $this->addHook("User::bookmarks", $this, 'hookGetUserBookmarks');
+    }
+
+    const table = 'pages_bookmarks';
+
+    public function hookGetUserBookmarks(HookEvent $event)
+    {
+        $user = $event->object;
+        $group_by_tag = !(empty($event->arguments[0]));
+
+        $base = BookmarkElement::allBookmarksByUser($user);
+
+        if (!$group_by_tag) {
+            $event->return = $base;
+            return;
+        }
+
+        // Group elements by tag
+        $sorted = array();
+        foreach ($base as $element) {
+            if (count($element->tags) == 0) {
+                if (!isset($sorted['unsorted'])) $sorted['unsorted'] = array();
+                $sorted['unsorted'][] = $element;
+                continue;
+            }
+
+            foreach ($element->tags as $tag) {
+                if (!isset($sorted[$tag])) $sorted[$tag] = array();
+                $sorted[$tag][] = $element;
+            }
+        }
+
+        ksort($sorted);
+        $event->return = $sorted;
+    }
+
+    public function hookGetBookmark(HookEvent $event)
+    {
+        $page = $event->object;
+        $event->return = BookmarkElement::getBookmarkByUserForPage($this->user, $page);
+    }
+
+    public function ___install()
+    {
+        $table = self::table;
+        $this->database->exec("CREATE TABLE IF NOT EXISTS `$table` (
+  `id` int(11) NOT NULL AUTO_INCREMENT,
+  `page_id` int(11) NOT NULL,
+  `user_id` int(11) NOT NULL,
+  `tags` varchar(255) NOT NULL,
+  `comment` varchar(255) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `page_id` (`page_id`,`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8 ;");
+    }
+
+    public function ___uninstall()
+    {
+        $table = self::table;
+        $this->database->exec("DROP TABLE `$table`;");
+    }
+}
+
+class BookmarkElement
+{
+    protected $page, $user, $comment = '', $tags = array(), $id, $exists = true;
+    protected static $instances = array();
+
+    public function __get($i)
+    {
+        return $this->$i;
+    }
+
+    public function __construct($ar = array())
+    {
+        foreach ($ar as $k => $v) $this->$k = $v;
+        $this->page = wire('pages')->get("id={$this->page}");
+        $this->user = wire('users')->get("id={$this->user}");
+
+        if ($this->page instanceof NullPage || !$this->page->viewable()) $this->exists = false;
+
+        self::$instances["{$this->user->id}-{$this->page->id}"] = $this;
+    }
+
+    public static function create($comment = '', $tags = array())
+    {
+        return new self(array('page' => wire('page')->id, 'user' => wire('user')->id, 'comment' => $comment, 'tags' => $tags));
+    }
+
+    public static function getBookmarkForThisPage(User $user = null)
+    {
+        return self::getBookmarkByUserForPage($user == null ? wire('user') : $user, wire('page'));
+    }
+
+    public static function getBookmarkByUserForPage(User $user, Page $page)
+    {
+        if (isset(self::$instances["{$user->id}-{$page->id}"])) return self::$instances["{$user->id}-{$page->id}"];
+
+        $instance = new self(array('page' => $page->id, 'user' => $user->id));
+        $instance->fetch();
+        return $instance;
+    }
+
+    public static function allBookmarksByUser(User $user = null)
+    {
+        $table = PageBookmarks::table;
+        $user = $user == null ? wire('user') : $user;
+        $pages = array();
+
+        if ($user == wire('users')->getGuestUser()) {
+            foreach (wire('session')->getAll() as $key => $value) {
+                if (substr($key, 0, 9) != 'bookmark_') continue;
+
+                $pages[] = str_replace('bookmark_', '', $key);
+            }
+        } else {
+            $statement = wire('database')->prepare("SELECT page_id FROM $table WHERE user_id = ?");
+            if (!$statement->execute(array($user->id))) return array();
+
+            while (($set = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+                $pages[] = $set['page_id'];
+            }
+        }
+
+        $re = array();
+        foreach ($pages as $p) $re[] = self::getBookmarkByUserForPage($user, wire('pages')->get("id=$p"));
+
+        return $re;
+    }
+
+    public function exists()
+    {
+        return $this->exists;
+    }
+
+    public function __set($i, $x)
+    {
+        switch ($i) {
+            case 'comment':
+                $x = trim(strip_tags($x));
+                break;
+            case 'tags':
+                if (!is_array($x)) return;
+                $r = array();
+                foreach ($x as $tag) {
+                    $tag = trim(strip_tags($tag));
+                    if ($tag == '') continue;
+
+                    $r[] = $tag;
+                }
+
+                $x = $r;
+                break;
+            default:
+                return;
+        }
+
+        $this->$i = $x;
+    }
+
+    public function delete()
+    {
+        if ($this->user == wire('users')->getGuestUser()) {
+            wire('session')->remove("bookmark_{$this->page->id}");
+            $this->exists = false;
+            return true;
+        }
+
+        $table = PageBookmarks::table;
+
+        if (!empty($this->id)) {
+            //Delete database record
+            $statement = wire('database')->prepare("DELETE FROM $table WHERE user_id = ? AND page_id = ?");
+            $this->exists = false;
+            return $statement->execute(array($this->user->id, $this->page->id));
+        }
+
+        return true;
+    }
+
+    public function save()
+    {
+        if ($this->user == wire('users')->getGuestUser()) {
+            // User is Guest -> store in session
+            wire('session')->set("bookmark_{$this->page->id}", json_encode($this->toArray()));
+            $this->exists = true;
+            return true;
+        }
+
+        $table = PageBookmarks::table;
+
+        if (empty($this->id) || !$this->exists()) {
+            // Database record not created or does not exist -> Insert record
+            $statement = wire('database')->prepare("INSERT INTO $table (page_id, user_id, tags, comment) VALUES (?,?,?,?)");
+            $statement->execute(array($this->page->id, $this->user->id, implode(',', $this->tags), $this->comment));
+            $this->id = wire('database')->lastInsertId();
+            $this->exists = true;
+            return true;
+        }
+
+        // Update record
+        $statement = wire('database')->prepare("UPDATE $table SET tags = ?, comment = ? WHERE page_id = ? AND user_id = ?");
+        $statement->execute(array(implode(',', $this->tags), $this->comment, $this->page->id, $this->user->id));
+    }
+
+    public function fetch()
+    {
+        $table = PageBookmarks::table;
+
+        if ($this->user == wire('users')->getGuestUser()) {
+            if (wire('session')->get("bookmark_{$this->page->id}") == null) {
+                $this->exists = false;
+                return;
+            }
+
+            $result_set = json_decode(wire('session')->get("bookmark_{$this->page->id}"), true);
+        } else {
+            $statement = wire('database')->prepare("SELECT id, comment, tags FROM $table WHERE page_id = ? AND user_id = ? LIMIT 1");
+
+            if (!$statement->execute(array($this->page->id, $this->user->id))) return null;
+
+            while (($set = $statement->fetch(PDO::FETCH_ASSOC)) !== false) {
+                $result_set = array(
+                    'comment' => $set['comment'],
+                    'tags' => array(),
+                    'id' => $set['id']
+                );
+
+                foreach (explode(' ', $set['tags']) as $tag) {
+                    if ($tag == '') continue;
+                    $result_set['tags'][] = $tag;
+                }
+
+                break;
+            }
+        }
+
+        if (isset($result_set)) {
+            foreach ($result_set as $k => $v) $this->$k = $v;
+        } else {
+            $this->exists = false;
+        }
+    }
+
+    public function toArray()
+    {
+        return array(
+            'id' => $this->id,
+            'page' => $this->page->id,
+            'user' => $this->user->id,
+            'comment' => $this->comment,
+            'tags' => $this->tags
+        );
+    }
+}
