@@ -11,8 +11,8 @@ $page->bookmark->save();	// bookmarks the current page for the current user
 This will add a basic bookmark to the current page. You can *optionally* allow the user to set custom tags or a custom comment for the bookmark:
 
 ```php
-$page->comment = 'I love kittens';
-$page->tags = array('cute', 'fluffy', 'pink');
+$page->bookmark->comment = 'I love kittens';
+$page->bookmark->tags = array('cute', 'fluffy', 'pink');
 $page->bookmark->save();
 ```
 
