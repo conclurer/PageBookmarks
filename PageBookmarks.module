@@ -9,7 +9,7 @@ class PageBookmarks extends WireData implements Module
             'title' => __('Bookmarks'),
             'summary' => __('Adds a simple API for users to bookmark pages.'),
             'author' => 'Conclurer GbR',
-            'version' => '101',
+            'version' => '102',
             'autoload' => true
         );
     }
@@ -256,7 +256,10 @@ class BookmarkElement
         }
 
         if (isset($result_set)) {
-            foreach ($result_set as $k => $v) $this->$k = $v;
+            foreach ($result_set as $k => $v) {
+                if ($k == 'page' || $k == 'user') continue;
+                $this->$k = $v;
+            }
         } else {
             $this->exists = false;
         }
